@@ -90,7 +90,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Save as Pascal voc xml
         self.default_save_dir = default_save_dir
-        self.label_file_format = settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.PASCAL_VOC)
+        self.label_file_format = settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.YOLO)
 
         # For loading all image under a directory
         self.m_img_list = []
@@ -557,6 +557,14 @@ class MainWindow(QMainWindow, WindowMixin):
         self.light_widget.valueChanged.connect(self.paint_canvas)
 
         self.populate_mode_actions()
+
+        # Set the default format to YOLO
+        if self.label_file_format == LabelFileFormat.YOLO:
+            self.set_format(FORMAT_YOLO)
+        elif self.label_file_format == LabelFileFormat.PASCAL_VOC:
+            self.set_format(FORMAT_PASCALVOC)
+        elif self.label_file_format == LabelFileFormat.CREATE_ML:
+            self.set_format(FORMAT_CREATEML)
 
         # Display cursor coordinates at the right of status bar
         self.label_coordinates = QLabel('')
