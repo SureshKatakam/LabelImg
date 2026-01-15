@@ -523,9 +523,19 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
         if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
             self.default_save_dir = save_dir
-            self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
-                                         (__appname__, self.default_save_dir))
-            self.statusBar().show()
+            
+        # Show status message with both input and output directories
+        status_parts = []
+        if self.last_open_dir and os.path.exists(self.last_open_dir):
+            status_parts.append(f"Input: {self.last_open_dir}")
+        if self.default_save_dir and os.path.exists(self.default_save_dir):
+            status_parts.append(f"Output: {self.default_save_dir}")
+            
+        if status_parts:
+            self.statusBar().showMessage(f'{__appname__} started. {" | ".join(status_parts)}')
+        else:
+            self.statusBar().showMessage(f'{__appname__} started.')
+        self.statusBar().show()
 
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
@@ -573,6 +583,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Open Dir if default file
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
+        # Auto-open last used input directory if no file_path is set
+        elif self.last_open_dir and os.path.exists(self.last_open_dir) and os.path.isdir(self.last_open_dir):
+            self.open_dir_dialog(dir_path=self.last_open_dir, silent=True)
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -1244,13 +1257,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
-            self.set_clean()
-            self.canvas.setEnabled(True)
-            self.adjust_scale(initial=True)
-            self.paint_canvas()
-            self.add_recent_file(self.file_path)
-            self.toggle_actions(True)
-            self.show_bounding_box_from_annotation_file(self.file_path)
+            else:
+                # Only load from annotation files if no label file exists
+                self.show_bounding_box_from_annotation_file(self.file_path)
 
             counter = self.counter_str()
             self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
@@ -1271,6 +1280,13 @@ class MainWindow(QMainWindow, WindowMixin):
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
 
     def show_bounding_box_from_annotation_file(self, file_path):
+        # Clear existing shapes to prevent duplication
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.label_list.clear()
+        self.canvas.shapes = []
+        self.canvas.selected_shapes = []
+        
         if self.default_save_dir is not None:
             basename = os.path.basename(os.path.splitext(file_path)[0])
             xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
@@ -1282,22 +1298,25 @@ class MainWindow(QMainWindow, WindowMixin):
             """
             if os.path.isfile(xml_path):
                 self.load_pascal_xml_by_filename(xml_path)
+                return
             elif os.path.isfile(txt_path):
                 self.load_yolo_txt_by_filename(txt_path)
+                return
             elif os.path.isfile(json_path):
                 self.load_create_ml_json_by_filename(json_path, file_path)
+                return
 
-        else:
-            xml_path = os.path.splitext(file_path)[0] + XML_EXT
-            txt_path = os.path.splitext(file_path)[0] + TXT_EXT
-            json_path = os.path.splitext(file_path)[0] + JSON_EXT
+        # Only check image directory if no annotation found in save directory
+        xml_path = os.path.splitext(file_path)[0] + XML_EXT
+        txt_path = os.path.splitext(file_path)[0] + TXT_EXT
+        json_path = os.path.splitext(file_path)[0] + JSON_EXT
 
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
+        if os.path.isfile(xml_path):
+            self.load_pascal_xml_by_filename(xml_path)
+        elif os.path.isfile(txt_path):
+            self.load_yolo_txt_by_filename(txt_path)
+        elif os.path.isfile(json_path):
+            self.load_create_ml_json_by_filename(json_path, file_path)
             
 
     def resizeEvent(self, event):
@@ -1398,6 +1417,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            # Immediately save the new save directory to settings
+            self.settings[SETTING_SAVE_DIR] = self.default_save_dir
+            self.settings.save()
 
         self.show_bounding_box_from_annotation_file(self.file_path)
 
@@ -1449,8 +1471,17 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
+        # Immediately save the new input directory to settings
+        self.settings[SETTING_LAST_OPEN_DIR] = self.last_open_dir
+        self.settings.save()
+        
         self.import_dir_images(target_dir_path)
-        self.default_save_dir = target_dir_path
+        # Only set default_save_dir if it wasn't already configured
+        if self.default_save_dir is None or len(self.default_save_dir) == 0:
+            self.default_save_dir = target_dir_path
+            # Save the new save directory to settings as well
+            self.settings[SETTING_SAVE_DIR] = self.default_save_dir
+            self.settings.save()
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
@@ -1652,6 +1683,9 @@ class MainWindow(QMainWindow, WindowMixin):
                                     '<p><b>%s</b></p>%s' % (title, message))
 
     def current_path(self):
+        # Prioritize default_save_dir if set, otherwise use image directory
+        if self.default_save_dir is not None and len(self.default_save_dir) > 0:
+            return self.default_save_dir
         return os.path.dirname(self.file_path) if self.file_path else '.'
 
     def choose_color1(self):
