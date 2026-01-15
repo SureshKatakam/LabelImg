@@ -379,6 +379,29 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
+        # Rotate actions
+        rotate_90_cw = action('Rotate 90° Clockwise', self.rotate_90_clockwise,
+                             'Ctrl+R', 'rotate_cw', 'Rotate image 90 degrees clockwise', enabled=False)
+        rotate_90_ccw = action('Rotate 90° Counter-Clockwise', self.rotate_90_counter_clockwise,
+                              'Ctrl+Shift+R', 'rotate_ccw', 'Rotate image 90 degrees counter-clockwise', enabled=False)
+        rotate_180 = action('Rotate 180°', self.rotate_180,
+                           'Ctrl+Alt+R', 'rotate_180', 'Rotate image 180 degrees', enabled=False)
+        
+        # Custom rotation actions
+        custom_rotate_setup = action('Custom Rotate Setup...', self.show_custom_rotate_dialog,
+                                   None, 'settings', 'Configure custom rotation angle and direction', enabled=True)
+        custom_rotate = action('Rotate 45° CW', self.rotate_custom,
+                              'Ctrl+T', 'rotate_custom', 'Rotate image by custom configured angle', enabled=False)
+
+        # Initialize custom rotation settings
+        self.custom_rotation_angle = 45  # Default angle
+        self.custom_rotation_clockwise = True  # Default direction
+
+        # Create rotate submenu
+        self.rotate_menu = QMenu('Rotate')
+        add_actions(self.rotate_menu, (rotate_90_cw, rotate_90_ccw, rotate_180, None, 
+                                     custom_rotate_setup, custom_rotate))
+
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
@@ -389,16 +412,18 @@ class MainWindow(QMainWindow, WindowMixin):
                               zoomActions=zoom_actions,
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
+                              rotate90cw=rotate_90_cw, rotate90ccw=rotate_90_ccw, rotate180=rotate_180,
+                              customRotateSetup=custom_rotate_setup, customRotate=custom_rotate,
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
                               editMenu=(edit, copy, delete,
-                                        None, color1, self.draw_squares_option),
+                                        None, color1, self.draw_squares_option, None, self.rotate_menu),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy,
                                                delete, shape_line_color, shape_fill_color),
                               onLoadActive=(
-                                  close, create, create_mode, edit_mode),
+                                  close, create, create_mode, edit_mode, rotate_90_cw, rotate_90_ccw, rotate_180, custom_rotate),
                               onShapesPresent=(save_as, hide_all, show_all))
 
         self.menus = Struct(
@@ -463,6 +488,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Application state.
         self.image = QImage()
+        self.original_image = QImage()  # Store original image for rotation
+        self.current_rotation = 0  # Track current rotation angle
         self.file_path = ustr(default_filename)
         self.last_open_dir = None
         self.recent_files = []
@@ -1086,6 +1113,62 @@ class MainWindow(QMainWindow, WindowMixin):
     def add_light(self, increment=10):
         self.set_light(self.light_widget.value() + increment)
 
+    def rotate_image_centered(self, angle):
+        """Rotate the image around its center to keep it properly positioned."""
+        if self.original_image is not None and not self.original_image.isNull():
+            # Update the cumulative rotation
+            self.current_rotation = (self.current_rotation + angle) % 360
+            
+            # Always rotate from the original image to avoid accumulation errors
+            if self.current_rotation == 0:
+                # No rotation needed
+                self.image = self.original_image.copy()
+            else:
+                # Apply rotation to original image
+                transform = QTransform()
+                transform.rotate(self.current_rotation)
+                self.image = self.original_image.transformed(transform, Qt.SmoothTransformation)
+            
+            # Update canvas with the rotated image
+            self.canvas.load_pixmap(QPixmap.fromImage(self.image))
+            
+            # Clear any existing shapes since they won't be valid after rotation
+            self.canvas.shapes = []
+            self.canvas.selected_shapes = []
+            self.canvas.selected_shape_copy = []
+            
+            # Fit the image to the canvas
+            self.scale_fit_window()
+            
+            self.paint_canvas()
+            self.set_dirty()
+
+    def rotate_90_clockwise(self):
+        """Rotate the current image 90 degrees clockwise."""
+        self.rotate_image_centered(90)
+
+    def rotate_90_counter_clockwise(self):
+        """Rotate the current image 90 degrees counter-clockwise."""
+        self.rotate_image_centered(-90)
+
+    def rotate_180(self):
+        """Rotate the current image 180 degrees."""
+        self.rotate_image_centered(180)
+
+    def show_custom_rotate_dialog(self):
+        """Show dialog to configure custom rotation settings."""
+        dialog = CustomRotateDialog(self.custom_rotation_angle, self.custom_rotation_clockwise, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.custom_rotation_angle, self.custom_rotation_clockwise = dialog.get_settings()
+            # Update the menu text to show current settings
+            direction = "CW" if self.custom_rotation_clockwise else "CCW"
+            self.actions.customRotate.setText(f'Rotate {self.custom_rotation_angle}° {direction}')
+
+    def rotate_custom(self):
+        """Rotate the current image by the custom configured angle and direction."""
+        angle = self.custom_rotation_angle if self.custom_rotation_clockwise else -self.custom_rotation_angle
+        self.rotate_image_centered(angle)
+
     def toggle_polygons(self, value):
         for item, shape in self.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
@@ -1147,6 +1230,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 return False
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
+            self.original_image = image.copy()  # Store original image for rotation
+            self.current_rotation = 0  # Reset rotation for new image
             self.file_path = unicode_file_path
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:
@@ -1711,6 +1796,65 @@ def get_main_app(argv=None):
                      args.save_dir)
     win.show()
     return app, win
+
+
+class CustomRotateDialog(QDialog):
+    """Dialog for configuring custom rotation settings."""
+    
+    def __init__(self, current_angle=45, current_clockwise=True, parent=None):
+        super(CustomRotateDialog, self).__init__(parent)
+        self.setWindowTitle("Custom Rotation Setup")
+        self.setModal(True)
+        self.resize(300, 150)
+        
+        # Create layout
+        layout = QVBoxLayout()
+        
+        # Angle input
+        angle_layout = QHBoxLayout()
+        angle_layout.addWidget(QLabel("Rotation Angle:"))
+        self.angle_spinbox = QSpinBox()
+        self.angle_spinbox.setRange(1, 360)
+        self.angle_spinbox.setValue(current_angle)
+        self.angle_spinbox.setSuffix("°")
+        angle_layout.addWidget(self.angle_spinbox)
+        layout.addLayout(angle_layout)
+        
+        # Direction selection
+        direction_layout = QHBoxLayout()
+        direction_layout.addWidget(QLabel("Direction:"))
+        self.direction_group = QButtonGroup()
+        self.clockwise_radio = QRadioButton("Clockwise")
+        self.counterclockwise_radio = QRadioButton("Counter-Clockwise")
+        self.direction_group.addButton(self.clockwise_radio, 0)
+        self.direction_group.addButton(self.counterclockwise_radio, 1)
+        
+        if current_clockwise:
+            self.clockwise_radio.setChecked(True)
+        else:
+            self.counterclockwise_radio.setChecked(True)
+            
+        direction_layout.addWidget(self.clockwise_radio)
+        direction_layout.addWidget(self.counterclockwise_radio)
+        layout.addLayout(direction_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("OK")
+        cancel_button = QPushButton("Cancel")
+        ok_button.clicked.connect(self.accept)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_settings(self):
+        """Return the configured angle and direction."""
+        angle = self.angle_spinbox.value()
+        clockwise = self.clockwise_radio.isChecked()
+        return angle, clockwise
 
 
 def main():
