@@ -1,15 +1,52 @@
-dog
-person
-cat
-tv
-car
-meatballs
-marinara sauce
-tomato soup
-chicken noodle soup
-french onion soup
-chicken breast
-ribs
-pulled pork
-hamburger
-cavity
+Cruise Control
+Low Beams
+Air-conditioning (AC) air vent
+Parking Lamps
+Turn Signals Left Right
+Instrument Lighting
+Roadside Parking lamps
+Door Lock Controls
+Computer (BC)
+Temperature Control
+windscreen washer
+Mini Joystick
+Cup Holder
+High Beams
+Switching Ignition ON and OFF
+USB Audio Interface
+Telephone
+Tachometer
+Gearshift
+Media Controls
+Overhead interior control console
+Voice activation System
+Gear position indicator
+Mechanical key lock
+Hand Brake
+Windshield Wiper Control
+Hazard warning system
+Instrument Display
+Seat
+Side-mirror adjustment switch
+On-Board Computer (OBC) fuel consumption display
+Side-mirror
+Interior rear-view mirror
+Door Handle
+Rear light
+Accelerator pedal
+Seat Adjustment Control
+Antenna
+Vipers
+Seat backrest recline adjustment lever
+Sun Visor
+Rear wipper washer
+Interior Door Handle
+Seat Slide Adjustment Rod
+Steering wheel
+Seat Belt
+Windshield washer jet
+Convertible top
+Door lock
+Tyre
+Door
+Speaker
