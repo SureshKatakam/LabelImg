@@ -395,9 +395,9 @@ class MainWindow(QMainWindow, WindowMixin):
         custom_rotate = action('Rotate 45° CW', self.rotate_custom,
                               'Ctrl+T', 'rotate_custom', 'Rotate image by custom configured angle', enabled=False)
 
-        # Initialize custom rotation settings
-        self.custom_rotation_angle = 45  # Default angle
-        self.custom_rotation_clockwise = True  # Default direction
+        # Initialize custom rotation settings from saved preferences
+        self.custom_rotation_angle = settings.get(SETTING_CUSTOM_ROTATION_ANGLE, 45)  # Default angle
+        self.custom_rotation_clockwise = settings.get(SETTING_CUSTOM_ROTATION_CLOCKWISE, True)  # Default direction
 
         # Create rotate submenu
         self.rotate_menu = QMenu('Rotate')
@@ -572,6 +572,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Set fit window as default zoom mode
         self.actions.fitWindow.setChecked(True)
+
+        # Update custom rotate menu text with saved settings
+        direction = "CW" if self.custom_rotation_clockwise else "CCW"
+        self.actions.customRotate.setText(f'Rotate {self.custom_rotation_angle}° {direction}')
 
         # Set the default format to YOLO
         if self.label_file_format == LabelFileFormat.YOLO:
@@ -1141,72 +1145,83 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def rotate_image_centered(self, angle):
         """Rotate the image around its center and create a new image file with transformed labels."""
-        if self.original_image is not None and not self.original_image.isNull():
-            # Store current shapes before rotation
-            current_shapes = []
-            for shape in self.canvas.shapes:
-                current_shapes.append({
-                    'label': shape.label,
-                    'points': [(point.x(), point.y()) for point in shape.points],
-                    'line_color': shape.line_color,
-                    'fill_color': shape.fill_color,
-                    'difficult': shape.difficult
-                })
-            
-            # Calculate new rotation
-            new_rotation = (self.current_rotation + angle) % 360
-            
-            # Apply rotation to original image
-            if new_rotation == 0:
-                rotated_image = self.original_image.copy()
-            else:
-                transform = QTransform()
-                transform.rotate(new_rotation)
-                rotated_image = self.original_image.transformed(transform, Qt.SmoothTransformation)
-            
-            # Create new filename with rotation angle
-            if self.file_path:
-                file_dir = os.path.dirname(self.file_path)
-                file_name = os.path.basename(self.file_path)
-                name_without_ext, ext = os.path.splitext(file_name)
+        try:
+            if self.original_image is not None and not self.original_image.isNull():
+                # Store current shapes before rotation
+                current_shapes = []
+                for shape in self.canvas.shapes:
+                    current_shapes.append({
+                        'label': shape.label,
+                        'points': [(point.x(), point.y()) for point in shape.points],
+                        'line_color': shape.line_color,
+                        'fill_color': shape.fill_color,
+                        'difficult': shape.difficult
+                    })
                 
-                # Remove any existing rotation suffix to avoid accumulation
+                # Extract existing rotation from filename if present
                 import re
-                name_without_ext = re.sub(r'_rot\d+$', '', name_without_ext)
+                existing_rotation = 0
+                if self.file_path:
+                    file_name = os.path.basename(self.file_path)
+                    name_without_ext = os.path.splitext(file_name)[0]
+                    match = re.search(r'_rot(\d+)$', name_without_ext)
+                    if match:
+                        existing_rotation = int(match.group(1))
                 
-                # Add new rotation suffix
-                new_file_name = f"{name_without_ext}_rot{int(new_rotation)}{ext}"
-                new_file_path = os.path.join(file_dir, new_file_name)
+                # Calculate new rotation based on existing rotation in filename
+                new_rotation = (existing_rotation + angle) % 360
                 
-                # Save the rotated image
-                rotated_image.save(new_file_path)
-                
-                # Transform labels for the new rotation
-                if current_shapes and angle != 0:
-                    transformed_shapes = self.transform_shapes_for_rotation(
-                        current_shapes, angle, self.original_image.width(), self.original_image.height()
-                    )
+                # Apply rotation to original image
+                if new_rotation == 0:
+                    rotated_image = self.original_image.copy()
                 else:
+                    transform = QTransform()
+                    transform.rotate(new_rotation)
+                    rotated_image = self.original_image.transformed(transform, Qt.SmoothTransformation)
+                
+                # Create new filename with rotation angle
+                if self.file_path:
+                    file_dir = os.path.dirname(self.file_path)
+                    file_name = os.path.basename(self.file_path)
+                    name_without_ext, ext = os.path.splitext(file_name)
+                    
+                    # Remove any existing rotation suffix to avoid accumulation
+                    import re
+                    name_without_ext = re.sub(r'_rot\d+$', '', name_without_ext)
+                    
+                    # Add new rotation suffix
+                    new_file_name = f"{name_without_ext}_rot{int(new_rotation)}{ext}"
+                    new_file_path = os.path.join(file_dir, new_file_name)
+                    
+                    # Save the rotated image
+                    rotated_image.save(new_file_path)
+                    
+                    # Keep labels in original positions (don't transform for rotation)
                     transformed_shapes = current_shapes
-                
-                # Load the new image file
-                self.load_file(new_file_path)
-                
-                # Apply transformed shapes
-                if transformed_shapes:
-                    self.load_transformed_shapes(transformed_shapes)
-                
-                self.statusBar().showMessage(f'Created rotated image: {new_file_name}')
-            else:
-                # Fallback to original behavior if no file path
-                self.current_rotation = new_rotation
-                self.image = rotated_image
-                self.canvas.load_pixmap(QPixmap.fromImage(self.image))
-                self.canvas.shapes = []
-                self.canvas.selected_shapes = []
-                self.scale_fit_window()
-                self.paint_canvas()
-                self.set_dirty()
+                    
+                    # Load the new image file
+                    self.load_file(new_file_path)
+                    
+                    # Apply transformed shapes
+                    if transformed_shapes:
+                        self.load_transformed_shapes(transformed_shapes)
+                    
+                    self.statusBar().showMessage(f'Created rotated image: {new_file_name}')
+                else:
+                    # Fallback to original behavior if no file path
+                    self.current_rotation = new_rotation
+                    self.image = rotated_image
+                    self.canvas.load_pixmap(QPixmap.fromImage(self.image))
+                    self.canvas.shapes = []
+                    self.canvas.selected_shapes = []
+                    self.scale_fit_window()
+                    self.paint_canvas()
+                    self.set_dirty()
+        except Exception as e:
+            self.error_message("Rotation Error", f"Failed to rotate image: {str(e)}")
+            print(f"Rotation error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def transform_shapes_for_rotation(self, shapes, angle, img_width, img_height):
         """Transform shape coordinates for rotation around image center."""
@@ -1251,29 +1266,46 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def load_transformed_shapes(self, transformed_shapes):
         """Load transformed shapes into the canvas."""
+        # Clear existing shapes and labels to prevent duplication
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.label_list.clear()
+        self.canvas.shapes = []
+        self.canvas.selected_shapes = []
+        
         shapes = []
         for shape_data in transformed_shapes:
-            shape = Shape(label=shape_data['label'])
-            for x, y in shape_data['points']:
-                # Ensure coordinates are within image bounds
-                x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
-                shape.add_point(QPointF(x, y))
-            
-            shape.difficult = shape_data['difficult']
-            shape.close()
-            
-            if shape_data['line_color']:
-                shape.line_color = shape_data['line_color']
-            else:
-                shape.line_color = generate_color_by_text(shape_data['label'])
+            try:
+                shape = Shape(label=shape_data['label'])
+                for x, y in shape_data['points']:
+                    # Ensure coordinates are within image bounds
+                    x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
+                    shape.add_point(QPointF(x, y))
                 
-            if shape_data['fill_color']:
-                shape.fill_color = shape_data['fill_color']
-            else:
-                shape.fill_color = generate_color_by_text(shape_data['label'])
-            
-            shapes.append(shape)
-            self.add_label(shape)
+                shape.difficult = shape_data.get('difficult', False)
+                shape.close()
+                
+                if shape_data.get('line_color'):
+                    if isinstance(shape_data['line_color'], (tuple, list)):
+                        shape.line_color = QColor(*shape_data['line_color'][:4])  # Handle RGBA
+                    else:
+                        shape.line_color = shape_data['line_color']
+                else:
+                    shape.line_color = generate_color_by_text(shape_data['label'])
+                    
+                if shape_data.get('fill_color'):
+                    if isinstance(shape_data['fill_color'], (tuple, list)):
+                        shape.fill_color = QColor(*shape_data['fill_color'][:4])  # Handle RGBA
+                    else:
+                        shape.fill_color = shape_data['fill_color']
+                else:
+                    shape.fill_color = generate_color_by_text(shape_data['label'])
+                
+                shapes.append(shape)
+                self.add_label(shape)
+            except Exception as e:
+                print(f"Warning: Failed to load shape {shape_data.get('label', 'unknown')}: {e}")
+                continue
         
         self.canvas.load_shapes(shapes)
         self.update_combo_box()
@@ -1295,6 +1327,12 @@ class MainWindow(QMainWindow, WindowMixin):
         dialog = CustomRotateDialog(self.custom_rotation_angle, self.custom_rotation_clockwise, self)
         if dialog.exec_() == QDialog.Accepted:
             self.custom_rotation_angle, self.custom_rotation_clockwise = dialog.get_settings()
+            
+            # Save settings immediately
+            self.settings[SETTING_CUSTOM_ROTATION_ANGLE] = self.custom_rotation_angle
+            self.settings[SETTING_CUSTOM_ROTATION_CLOCKWISE] = self.custom_rotation_clockwise
+            self.settings.save()
+            
             # Update the menu text to show current settings
             direction = "CW" if self.custom_rotation_clockwise else "CCW"
             self.actions.customRotate.setText(f'Rotate {self.custom_rotation_angle}° {direction}')
@@ -1365,7 +1403,17 @@ class MainWindow(QMainWindow, WindowMixin):
                 return False
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
-            self.original_image = image.copy()  # Store original image for rotation
+            
+            # Only update original_image if this is not a rotated file
+            # This prevents shrinking on subsequent rotations
+            import re
+            file_name = os.path.basename(unicode_file_path)
+            name_without_ext = os.path.splitext(file_name)[0]
+            if not re.search(r'_rot\d+$', name_without_ext):
+                # This is an original file, store it
+                self.original_image = image.copy()
+            # If it's a rotated file, keep the existing original_image
+            
             self.current_rotation = 0  # Reset rotation for new image
             self.file_path = unicode_file_path
             self.canvas.load_pixmap(QPixmap.fromImage(image))
@@ -1509,6 +1557,8 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
+        settings[SETTING_CUSTOM_ROTATION_ANGLE] = self.custom_rotation_angle
+        settings[SETTING_CUSTOM_ROTATION_CLOCKWISE] = self.custom_rotation_clockwise
         settings.save()
 
     def load_recent(self, filename):
