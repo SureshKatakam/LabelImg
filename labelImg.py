@@ -7,6 +7,8 @@ import platform
 import shutil
 import sys
 import webbrowser as wb
+import math
+import re
 from functools import partial
 
 try:
@@ -321,7 +323,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Group zoom controls into a list for easier toggling.
         zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
                         zoom_org, fit_window, fit_width)
-        self.zoom_mode = self.MANUAL_ZOOM
+        self.zoom_mode = self.FIT_WINDOW
         self.scalers = {
             self.FIT_WINDOW: self.scale_fit_window,
             self.FIT_WIDTH: self.scale_fit_width,
@@ -567,6 +569,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.light_widget.valueChanged.connect(self.paint_canvas)
 
         self.populate_mode_actions()
+
+        # Set fit window as default zoom mode
+        self.actions.fitWindow.setChecked(True)
 
         # Set the default format to YOLO
         if self.label_file_format == LabelFileFormat.YOLO:
@@ -1135,34 +1140,143 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_light(self.light_widget.value() + increment)
 
     def rotate_image_centered(self, angle):
-        """Rotate the image around its center to keep it properly positioned."""
+        """Rotate the image around its center and create a new image file with transformed labels."""
         if self.original_image is not None and not self.original_image.isNull():
-            # Update the cumulative rotation
-            self.current_rotation = (self.current_rotation + angle) % 360
+            # Store current shapes before rotation
+            current_shapes = []
+            for shape in self.canvas.shapes:
+                current_shapes.append({
+                    'label': shape.label,
+                    'points': [(point.x(), point.y()) for point in shape.points],
+                    'line_color': shape.line_color,
+                    'fill_color': shape.fill_color,
+                    'difficult': shape.difficult
+                })
             
-            # Always rotate from the original image to avoid accumulation errors
-            if self.current_rotation == 0:
-                # No rotation needed
-                self.image = self.original_image.copy()
+            # Calculate new rotation
+            new_rotation = (self.current_rotation + angle) % 360
+            
+            # Apply rotation to original image
+            if new_rotation == 0:
+                rotated_image = self.original_image.copy()
             else:
-                # Apply rotation to original image
                 transform = QTransform()
-                transform.rotate(self.current_rotation)
-                self.image = self.original_image.transformed(transform, Qt.SmoothTransformation)
+                transform.rotate(new_rotation)
+                rotated_image = self.original_image.transformed(transform, Qt.SmoothTransformation)
             
-            # Update canvas with the rotated image
-            self.canvas.load_pixmap(QPixmap.fromImage(self.image))
+            # Create new filename with rotation angle
+            if self.file_path:
+                file_dir = os.path.dirname(self.file_path)
+                file_name = os.path.basename(self.file_path)
+                name_without_ext, ext = os.path.splitext(file_name)
+                
+                # Remove any existing rotation suffix to avoid accumulation
+                import re
+                name_without_ext = re.sub(r'_rot\d+$', '', name_without_ext)
+                
+                # Add new rotation suffix
+                new_file_name = f"{name_without_ext}_rot{int(new_rotation)}{ext}"
+                new_file_path = os.path.join(file_dir, new_file_name)
+                
+                # Save the rotated image
+                rotated_image.save(new_file_path)
+                
+                # Transform labels for the new rotation
+                if current_shapes and angle != 0:
+                    transformed_shapes = self.transform_shapes_for_rotation(
+                        current_shapes, angle, self.original_image.width(), self.original_image.height()
+                    )
+                else:
+                    transformed_shapes = current_shapes
+                
+                # Load the new image file
+                self.load_file(new_file_path)
+                
+                # Apply transformed shapes
+                if transformed_shapes:
+                    self.load_transformed_shapes(transformed_shapes)
+                
+                self.statusBar().showMessage(f'Created rotated image: {new_file_name}')
+            else:
+                # Fallback to original behavior if no file path
+                self.current_rotation = new_rotation
+                self.image = rotated_image
+                self.canvas.load_pixmap(QPixmap.fromImage(self.image))
+                self.canvas.shapes = []
+                self.canvas.selected_shapes = []
+                self.scale_fit_window()
+                self.paint_canvas()
+                self.set_dirty()
+
+    def transform_shapes_for_rotation(self, shapes, angle, img_width, img_height):
+        """Transform shape coordinates for rotation around image center."""
+        transformed_shapes = []
+        
+        # Convert angle to radians
+        import math
+        angle_rad = math.radians(angle)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        # Image center
+        cx = img_width / 2
+        cy = img_height / 2
+        
+        for shape in shapes:
+            transformed_points = []
+            for x, y in shape['points']:
+                # Translate to origin
+                x_centered = x - cx
+                y_centered = y - cy
+                
+                # Apply rotation
+                x_rotated = x_centered * cos_a - y_centered * sin_a
+                y_rotated = x_centered * sin_a + y_centered * cos_a
+                
+                # Translate back
+                x_new = x_rotated + cx
+                y_new = y_rotated + cy
+                
+                transformed_points.append((x_new, y_new))
             
-            # Clear any existing shapes since they won't be valid after rotation
-            self.canvas.shapes = []
-            self.canvas.selected_shapes = []
-            self.canvas.selected_shape_copy = []
+            transformed_shapes.append({
+                'label': shape['label'],
+                'points': transformed_points,
+                'line_color': shape['line_color'],
+                'fill_color': shape['fill_color'],
+                'difficult': shape['difficult']
+            })
+        
+        return transformed_shapes
+
+    def load_transformed_shapes(self, transformed_shapes):
+        """Load transformed shapes into the canvas."""
+        shapes = []
+        for shape_data in transformed_shapes:
+            shape = Shape(label=shape_data['label'])
+            for x, y in shape_data['points']:
+                # Ensure coordinates are within image bounds
+                x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
+                shape.add_point(QPointF(x, y))
             
-            # Fit the image to the canvas
-            self.scale_fit_window()
+            shape.difficult = shape_data['difficult']
+            shape.close()
             
-            self.paint_canvas()
-            self.set_dirty()
+            if shape_data['line_color']:
+                shape.line_color = shape_data['line_color']
+            else:
+                shape.line_color = generate_color_by_text(shape_data['label'])
+                
+            if shape_data['fill_color']:
+                shape.fill_color = shape_data['fill_color']
+            else:
+                shape.fill_color = generate_color_by_text(shape_data['label'])
+            
+            shapes.append(shape)
+            self.add_label(shape)
+        
+        self.canvas.load_shapes(shapes)
+        self.update_combo_box()
 
     def rotate_90_clockwise(self):
         """Rotate the current image 90 degrees clockwise."""
@@ -1270,6 +1384,15 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.item(self.label_list.count() - 1).setSelected(True)
 
             self.canvas.setFocus(True)
+            
+            # Enable canvas and UI actions
+            self.canvas.setEnabled(True)
+            self.toggle_actions(True)
+            
+            # Apply fit-to-window scaling and update display
+            self.adjust_scale()
+            self.paint_canvas()
+            
             return True
         return False
 
