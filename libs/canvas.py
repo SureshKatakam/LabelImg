@@ -266,8 +266,8 @@ class Canvas(QWidget):
                 self.prev_point = pos
 
                 if selection is None:
-                    # pan
-                    QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
+                    # pan - use override_cursor for consistent cursor management
+                    self.override_cursor(QCursor(Qt.OpenHandCursor))
                     self.pan_initial_pos = ev.pos()
 
         elif ev.button() == Qt.RightButton and self.editing():
@@ -294,8 +294,8 @@ class Canvas(QWidget):
             if self.drawing():
                 self.handle_drawing(pos)
             else:
-                # pan
-                QApplication.restoreOverrideCursor()
+                # pan - use restore_cursor for consistent cursor management
+                self.restore_cursor()
 
     def end_move(self, copy=False):
         assert self.selected_shape and self.selected_shape_copy
